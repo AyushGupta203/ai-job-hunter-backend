@@ -1,21 +1,20 @@
 {
   "name": "jobhunter",
   "version": "1.0.0",
-  "description": "",
+  "description": "AI Job Hunter Backend",
   "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "nodemon index.js"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "echo \"No tests\" && exit 0"
+  },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1038.0",
-    "@google/genai": "^1.50.1",
     "@mistralai/mistralai": "^2.2.0",
-    "aws-sdk": "^2.1693.0",
     "axios": "^1.15.2",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
@@ -25,8 +24,6 @@
     "mongoose": "^9.4.1",
     "multer": "^2.1.1",
     "multer-s3": "^3.0.1",
-    "openai": "^6.34.0",
-    "pdf-parse": "^2.4.5",
     "unpdf": "^1.6.0"
   },
   "devDependencies": {
