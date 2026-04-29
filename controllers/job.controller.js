@@ -3,7 +3,7 @@ import Job from "../models/job.js";
 export const createJob = async(req , res)=>{
 
   try{
-    const{title, company, location, description} = req.body;
+    const{title, company, location, description ,  salary} = req.body;
 
     if(!title || !company || !location || !description){
       return res.status(400).json({msg: "All fields required"});
@@ -14,6 +14,7 @@ export const createJob = async(req , res)=>{
       company,
       location,
       description,
+      salary : salary || "Not disclosed",
       postedBy: req.user.id
 
     });
@@ -63,4 +64,16 @@ export const getMyJobs = async (req, res) => {
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }
+};
+
+export const updateJobStatus = async (req , res) =>{
+  const{jobId , status} = req.body;
+
+  const job = await Job.findById(jobId);
+  if(job.postedBy.toString() !== req.user.id){
+    return res.status(403).json({msg : "Not allowed"});
+  }
+  job.status = status;
+  await job.save();
+  res.json(job);
 };

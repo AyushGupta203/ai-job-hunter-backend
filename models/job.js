@@ -22,11 +22,24 @@ const jobSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
-    
+
     company: {
   type: String,
   required: true,
 },
+status: {
+  type: String,
+  enum: ["open", "closed", "paused"],
+  default: "open"
+},
+hiredCount: {
+  type: Number,
+  default: 0
+},
+salary: {
+  type: String,
+  default: "Not Disclosed"
+}
   },
   {timestamps: true}
 );

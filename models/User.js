@@ -23,6 +23,10 @@ const userSchema = new mongoose.Schema(
       enum:["seeker" ,"recruiter"],
       required: true,
     },
+    resumeUrl: {
+      type: String,
+      default: "",
+    },
     resumeText: {
       type: String,
       default: "",
@@ -33,6 +37,10 @@ const userSchema = new mongoose.Schema(
     },
     aiResetAt:{
       type: Date,
+    },
+    recommendations: {
+      type: Array,
+      default: [],
     },
   },
   {timestamps: true}

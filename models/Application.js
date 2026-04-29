@@ -13,11 +13,11 @@ const applicationSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
-
-    status: {
-      type: String,
-      default: "Applied",
-    },
+  status: {
+  type: String,
+  enum: ["applied", "shortlisted", "rejected", "hired"],
+  default: "applied"
+},
 
    aiAnalysis: {
   matchScore: Number,       
@@ -27,6 +27,8 @@ const applicationSchema = new mongoose.Schema(
   summary: String,
   analyzedAt: Date,
 },
+
+
   },
   { timestamps: true }
 );

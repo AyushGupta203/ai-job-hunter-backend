@@ -62,11 +62,40 @@ export const getApplicants = async (req, res) => {
     }
 
     const applicants = await Application.find({ jobId })
-      .populate("userId", "name email")
+      .populate("userId", "name email resumeUrl resumeText")
       .sort({ createdAt: -1 });
 
     res.json(applicants);
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }
+};
+
+export const updateApplicationStatus = async (req, res) => {
+  const {applicationId, status} = req.body;
+  const application = await Application.findById(applicationId);
+  const job = await Job.findById(application.jobId);
+  
+    if(job.postedBy.toString() !== req.user.id){
+      return res.status(403).json({msg: "Not allowed"});
+    }
+    application.status = status;
+    await application.save();
+    res.json(application);
+};
+
+export const hireCandidate = async(req , res)=>{
+  const {applicationId} = req.body;
+
+  const application = await Application.findById(applicationId);
+  const job = await Job.findById(application.jobId);
+  if(job.postedBy.toString() !== req.user.id){
+    return res.status(403).json({msg: "Not allowed"})
+  }
+  application.status = "hired";
+  await application.save();
+  job.hiredCount += 1;
+  job.status = "closed";
+  await job.save();
+  res.json({msg: "candidate hired successfully"});
 };
