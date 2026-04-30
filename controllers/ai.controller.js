@@ -3,14 +3,106 @@ import User from "../models/User.js";
 import Job from "../models/job.js";
 import { Mistral } from "@mistralai/mistralai";
 
-
-
 // Mistral client
 const client = new Mistral({
   apiKey: process.env.MISTRAL_API_KEY,
 });
 
-//resume match
+// ─── SINGLE SCORING PROMPT (used by EVERY scoring function) ───
+// This is the ONLY place scores come from. Every function calls
+// buildScoringPrompt() so they all produce identical scores.
+
+const buildScoringPrompt = (resumeText, jobDescription) => `
+Evaluate this resume against the job description.
+
+RESUME:
+${resumeText.slice(0, 1500)}
+
+JOB DESCRIPTION:
+${jobDescription}
+
+  STEP 1 — Extract required skills and top 5 keywords from JOB DESCRIPTION:
+  - List every skill, technology, or qualification explicitly mentioned as required.
+  - Identify the top 5 keywords that best summarize the role (e.g., “React”, “AWS”, “CI/CD”, “Leadership”, “Agile”).
+  - Label each skill as CRITICAL (must‑have) or PREFERRED (nice‑to‑have).
+
+STEP 2 — Check resume evidence for EACH skill:
+- For each required skill, answer: does the resume mention it? (YES with evidence / NO)
+- Evidence = specific project, work experience, certification, or measurable outcome
+- Do NOT assume skills. Only count what is explicitly written
+
+STEP 3 — Calculate score using this formula:
+- Count total CRITICAL skills from job description = T
+- Count CRITICAL skills with YES evidence in resume = M
+- Base score = (M / T) * 80
+- Add up to +10 if PREFERRED skills also match
+- Add up to +10 if resume shows measurable impact (numbers, metrics, scale)
+- Final score = Base + Preferred bonus + Impact bonus (cap at 100)
+
+HARD RULES:
+- Score CANNOT exceed 85 unless EVERY critical skill has evidence
+- Score CANNOT exceed 70 if ANY critical skill has ZERO evidence
+- Score MUST be below 50 if more than half of critical skills are missing
+- Score MUST be below 30 if resume has almost no overlap with job requirements
+- Same resume + same job = same score. No randomness
+
+STEP 4 — Generate output:
+
+Return ONLY this JSON. No markdown fences. No explanation outside JSON:
+{
+  "matchScore": <integer 0-100>,
+  "missingSkills": ["only skills with ZERO evidence in resume"],
+  "strengths": ["skill WITH evidence summary, max 8 words each"],
+  "weaknesses": ["single biggest gap that matters most"],
+  "reason": "2-3 sentences explaining why the score was given, referencing key keywords, strongest matches, gaps, and a brief recommendation to apply now if the score is high.",
+  "summary": "3 sentences: verdict, strongest qualification, one action to improve"
+}
+`;
+
+// Helper: call Mistral with temperature=0 and top_p=1 for deterministic output
+const callMistral = async (prompt) => {
+  const response = await client.chat.complete({
+    model: "mistral-small-latest",
+    temperature: 0,
+    topP: 1,
+    messages: [{ role: "user", content: prompt }],
+  });
+  return response.choices[0].message.content;
+};
+
+// Helper: parse JSON from Mistral response (robust)
+const parseJSON = (text, fallback) => {
+  const clean = text.replace(/```json|```/g, "").trim();
+  try {
+    return JSON.parse(clean);
+  } catch {
+    const match = clean.match(/[\[{][\s\S]*[\]}]/);
+    if (match) {
+      try { return JSON.parse(match[0]); } catch { /* fall through */ }
+    }
+    return fallback;
+  }
+};
+
+// Helper: clamp and validate score
+const clampScore = (score) => {
+  let s = Number(score);
+  if (s <= 1 && s > 0) s = Math.round(s * 100);
+  if (isNaN(s)) s = 50;
+  return Math.max(0, Math.min(100, Math.round(s)));
+};
+
+// Shared fallback for scoring results
+const SCORE_FALLBACK = {
+  matchScore: 50,
+  missingSkills: [],
+  strengths: [],
+  weaknesses: ["Could not parse AI response"],
+  reason: "Analysis could not be completed",
+  summary: "Analysis could not be completed. Please try again.",
+};
+
+// ─── 1. MATCH RESUME (Recruiter: match applicant to job) ──────
 
 export const matchResume = async (req, res) => {
   try {
@@ -21,7 +113,7 @@ export const matchResume = async (req, res) => {
     }
 
     const app = await Application.findById(applicationId).populate("jobId");
-    
+
     if (!app) {
       return res.status(404).json({ msg: "Application not found" });
     }
@@ -32,102 +124,11 @@ export const matchResume = async (req, res) => {
       return res.status(400).json({ msg: "Upload resume first" });
     }
 
-    const response = await client.chat.complete({
-      model: "mistral-small-latest",
-      messages: [
-        {
-          role: "user",
-          content: `<s>[INST] You are a senior technical recruiter with 10+ years of experience evaluating software engineering candidates. You assess real work evidence, not keyword matching.
+    const prompt = buildScoringPrompt(user.resumeText, app.jobId.description);
+    const text = await callMistral(prompt);
+    const parsed = parseJSON(text, SCORE_FALLBACK);
 
-<resume>
-${user.resumeText.slice(0, 1200)}
-</resume>
-
-<job_description>
-${app.jobId.description}
-</job_description>
-
-# Task
-Evaluate this candidate's fit for this role using the framework below.
-
-# Step 1: Analyze Match Quality
-Consider:
-- Does the resume show EVIDENCE of using required skills (e.g., "built React app with 10k users" vs "knows React")?
-- Are there measurable outcomes or specific projects?
-- Does their career progression make sense for this role?
-
-Use this scoring scale:
-- Excellent Match (85-100): Meets all core requirements with clear evidence. Ready to interview immediately.
-- Strong Match (70-84): Meets most requirements. Minor gaps closable in 30-60 days with training.
-- Moderate Match (50-69): Has foundational skills but missing 1-2 critical requirements. Would need significant ramp-up.
-- Weak Match (0-49): Lacks multiple core requirements. Not viable without major skill development.
-
-# Step 2: Identify Gaps
-List ONLY skills that are:
-1. Explicitly required in the job description
-2. Have ZERO evidence in the resume (not mentioned at all, not in projects, not in experience)
-
-Do NOT list nice-to-haves or skills that are mentioned but not heavily demonstrated.
-
-# Step 3: Identify Strengths
-List strengths WITH EVIDENCE. Examples:
-✅ "Has 3 years of React experience with 2 production deployments mentioned"
-❌ "Good at React"
-
-# Step 4: Identify the Single Biggest Weakness
-What is the ONE thing that would make a hiring manager hesitate most? Be direct and specific.
-
-# Step 5: Write Summary
-Write exactly 3 sentences:
-- Sentence 1: Overall verdict (e.g., "Strong fit" or "Not a good match right now")
-- Sentence 2: The single strongest reason to interview this candidate
-- Sentence 3: The one specific action they should take to strengthen their application
-
-# Output Format
-Return ONLY this JSON structure, no markdown fences, no extra text:
-
-{
-  "matchScore": <number 0-100>,
-  "missingSkills": ["skill1", "skill2"],
-  "strengths": ["evidence-based strength 1", "evidence-based strength 2"],
-  "weaknesses": ["one specific gap"],
-  "summary": "3 sentence evaluation"
-}
-
-# Example (for reference only, do not copy this data):
-
-Resume: "Software Engineer with 2 years Python experience. Built REST APIs using Flask. Deployed on AWS EC2."
-Job: "Looking for Python developer with Flask, AWS, and Docker experience."
-
-Correct output:
-{
-  "matchScore": 72,
-  "missingSkills": ["Docker"],
-  "strengths": ["2 years hands-on Python/Flask with production REST API experience", "Has AWS deployment experience with EC2"],
-  "weaknesses": ["No container orchestration experience - would need Docker training before shipping production containers"],
-  "summary": "Strong match for core Python/Flask requirements. Their AWS experience and production API work shows they can handle backend systems. Should complete a Docker fundamentals course and add one containerized project to their portfolio."
-}
-
-Now evaluate the actual resume and job description provided above. [/INST]`,
-        },
-      ],
-    });
-
-    const text = response.choices[0].message.content;
-    const clean = text.replace(/```json|```/g, "").trim();
-
-    let parsed;
-    try {
-      parsed = JSON.parse(clean);
-    } catch {
-      parsed = { 
-        matchScore: 50, 
-        missingSkills: [],
-        strengths: [],
-        weaknesses: ["JSON parsing failed - resume format may be incompatible"],
-        summary: "Unable to process this resume format. Please upload a clearer text-based resume."
-      };
-    }
+    parsed.matchScore = clampScore(parsed.matchScore);
 
     app.aiAnalysis = {
       matchScore: parsed.matchScore,
@@ -139,15 +140,16 @@ Now evaluate the actual resume and job description provided above. [/INST]`,
     };
 
     await app.save();
-
     res.json(parsed);
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }
-}
+};
 
 
-//  JOB RECOMMENDATION
+// ─── 2. RECOMMEND JOBS (Seeker: AI Hunter suggestions) ────────
+// Scores each job INDIVIDUALLY using the SAME prompt as evaluate/match.
+// This guarantees: Hunter score === Analyze score for the same job.
 
 export const recommendJobs = async (req, res) => {
   try {
@@ -157,18 +159,24 @@ export const recommendJobs = async (req, res) => {
       return res.status(400).json({ msg: "Upload resume first" });
     }
 
-    // caching
+    // Return cached results if available
     if (user.recommendations?.length) {
       return res.json(user.recommendations);
     }
 
     const jobs = await Job.find();
 
-    // 🔹 Step 1: Pre-filter
+    // Pre-filter: rough keyword overlap to pick top 5 candidates
     const roughScore = (resume, jd) => {
       const r = resume.toLowerCase();
       const j = jd.toLowerCase();
-      const keywords = ["react", "node", "javascript", "mongodb", "express"];
+      const keywords = [
+        "react", "node", "javascript", "mongodb", "express",
+        "python", "java", "typescript", "aws", "docker",
+        "sql", "css", "html", "api", "git", "angular",
+        "vue", "spring", "django", "flask", "kubernetes",
+        "c++", "c#", "php", "ruby", "golang", "rust",
+      ];
       return keywords.reduce(
         (score, k) => score + (r.includes(k) && j.includes(k) ? 1 : 0),
         0
@@ -181,97 +189,38 @@ export const recommendJobs = async (req, res) => {
       .slice(0, 5)
       .map(x => x.job);
 
- 
-    const jobList = topJobs
-      .map(
-        (j, i) => `
-INDEX: ${i}
-TITLE: ${j.title}
-DESCRIPTION: ${j.description.slice(0, 300)}
-`
-      )
-      .join("\n---\n");
+    // Score EACH job individually using the EXACT same prompt
+    const results = [];
 
-    const response = await client.chat.complete({
-      model: "mistral-small-latest",
-      messages: [
-        {
-          role: "user",
-          content: `
-You are an ATS scoring system. Score each job based on how well the resume matches.
+    for (const job of topJobs) {
+      try {
+        const prompt = buildScoringPrompt(user.resumeText, job.description);
+        const text = await callMistral(prompt);
+        const parsed = parseJSON(text, SCORE_FALLBACK);
 
-RULES:
-- Each job MUST get a DIFFERENT score
-- Use full range (40–95)
-- Penalize missing skills, reward exact matches
-- Return ONLY a raw JSON array, no markdown, no explanation
-
-RESUME:
-${user.resumeText.slice(0, 1200)}
-
-JOBS:
-${jobList}
-
-Return this EXACT format (use the INDEX values from above):
-[
-  { "index": 0, "matchScore": 85 },
-  { "index": 1, "matchScore": 72 }
-]
-`,
-        },
-      ],
-    });
-
-    const text = response.choices[0].message.content;
-  
-    const clean = text.replace(/```json|```/g, "").trim();
-
-    let parsed = [];
-    try {
-      const jsonMatch = clean.match(/\[[\s\S]*\]/);
-      if (jsonMatch) {
-        parsed = JSON.parse(jsonMatch[0]);
-      }
-    } catch (e) {
-    
-    }
-
-    if (!parsed.length) {
-      
-      return res.json(
-        topJobs.map(j => ({
-          jobId: j._id,
-          title: j.title,
-          location: j.location,
-          matchScore: 50,
-        }))
-      );
-    }
-
-  
-    const results = parsed
-      .map(p => {
-        const job = topJobs[p.index];
-        if (!job) return null;
-
-        let score = Number(p.matchScore);
-        if (score <= 1) score = Math.round(score * 100);
-        if (isNaN(score)) score = 50;
-        score = Math.max(0, Math.min(100, Math.round(score)));
-
-        return {
+        results.push({
           jobId: job._id,
           title: job.title,
           location: job.location,
-          matchScore: score,
-        };
-      })
-      .filter(Boolean);
+          matchScore: clampScore(parsed.matchScore),
+          reason: parsed.reason || parsed.summary?.split(".")[0] || "AI-analyzed match",
+        });
+      } catch {
+        // If one job fails, still continue with others
+        results.push({
+          jobId: job._id,
+          title: job.title,
+          location: job.location,
+          matchScore: 50,
+          reason: "Could not analyze this job",
+        });
+      }
+    }
 
-    //  sort by score descending
+    // Sort by score descending
     results.sort((a, b) => b.matchScore - a.matchScore);
 
-    //  cache results
+    // Cache results
     await User.findByIdAndUpdate(req.user.id, {
       recommendations: results,
     });
@@ -282,6 +231,8 @@ Return this EXACT format (use the INDEX values from above):
   }
 };
 
+// ─── 3. RESUME REVIEW (Seeker: get resume feedback) ───────────
+
 export const reviewResume = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
@@ -290,80 +241,59 @@ export const reviewResume = async (req, res) => {
       return res.status(400).json({ msg: "Upload resume first" });
     }
 
-    const response = await client.chat.complete({
-      model: "mistral-small-latest",
-      messages: [
-        {
-          role: "user",
-          content: `<s>[INST] You are a senior technical recruiter who reviews 50+ resumes daily. Analyze this resume and provide honest, actionable feedback.
+    const prompt = `Analyze this resume and provide actionable feedback.
 
-<resume>
+RESUME:
 ${user.resumeText.slice(0, 1500)}
-</resume>
 
-# Analysis Framework
+TASKS:
+1. Score overall quality (0-100):
+   - 85-100: Quantified results, clear impact, strong action verbs
+   - 70-84: Good foundation, needs minor polish
+   - 50-69: Acceptable but needs significant improvement
+   - 0-49: Major overhaul required
 
-## Step 1: Extract Current Bullet Points
-Find 2-3 weak bullet points from the resume that lack quantification or impact.
+2. List 2-3 specific strengths (with evidence from resume)
 
-## Step 2: Calculate Overall Score
-Scale:
-- 85-100: Immediately stands out (quantified results, clear impact, good formatting)
-- 70-84: Strong foundation, needs minor polish
-- 50-69: Acceptable but significant improvements needed
-- 0-49: Requires major overhaul
+3. Find 2-3 weak bullet points. For each provide:
+   - original: exact text copied from resume
+   - improved: rewritten with quantification and action verbs
+   - why: one sentence explaining the improvement
 
-## Step 3: Identify Specific Improvements
-For each weak bullet point found, provide:
-- Original text (what they wrote)
-- Improved version (with quantification)
-- Why the change matters
+4. List 3-5 improvement suggestions as issue/fix pairs
 
-## Step 4: Technical Keyword Gap Analysis
-List 5-10 high-impact keywords missing from resume (Git, CI/CD, Docker, REST API, Agile, etc.)
+5. List 5-10 high-impact missing keywords (Git, CI/CD, Docker, REST API, Agile, etc.)
 
-# Output Format
+OUTPUT FORMAT (return ONLY this JSON, no markdown fences):
 {
-  "overallScore": <number 0-100>,
-  "summary": "2-3 sentence honest assessment",
+  "overallScore": <integer 0-100>,
+  "summary": "2-3 sentence assessment",
   "strengths": ["specific strength 1", "specific strength 2"],
   "weakBullets": [
     {
-      "original": "Worked on React projects",
-      "improved": "Built 3 production React applications deployed on AWS serving 200+ daily users",
-      "why": "Original lacks quantification - improved version shows scope (3 apps), technology (AWS), and impact (200+ users)"
+      "original": "exact text from resume",
+      "improved": "quantified improved version",
+      "why": "one sentence explanation"
     }
   ],
   "improvements": [
     {
-      "issue": "what's missing",
+      "issue": "what is missing",
       "fix": "exactly what to add"
     }
   ],
   "missingKeywords": ["keyword1", "keyword2"]
-}
+}`;
 
-Return ONLY JSON, no markdown. [/INST]`,
-        },
-      ],
+    const text = await callMistral(prompt);
+    const parsed = parseJSON(text, {
+      overallScore: 50,
+      summary: "Could not parse resume. Please ensure it is in plain text format.",
+      strengths: [],
+      weakBullets: [],
+      improvements: [],
+      missingKeywords: [],
     });
-
-    const text = response.choices[0].message.content;
-    const clean = text.replace(/```json|```/g, "").trim();
-
-    let parsed;
-    try {
-      parsed = JSON.parse(clean);
-    } catch {
-      parsed = {
-        overallScore: 50,
-        summary: "Could not parse resume - please ensure it's in plain text format",
-        strengths: [],
-        weakBullets: [],
-        improvements: [],
-        missingKeywords: []
-      };
-    }
 
     res.json(parsed);
   } catch (err) {
@@ -371,6 +301,9 @@ Return ONLY JSON, no markdown. [/INST]`,
     res.status(500).json({ msg: err.message });
   }
 };
+
+// ─── 4. EVALUATE (Seeker: evaluate self against specific job) ─
+// Uses the EXACT same buildScoringPrompt as matchResume and recommendJobs
 
 export const evaluate = async (req, res) => {
   try {
@@ -382,55 +315,19 @@ export const evaluate = async (req, res) => {
       return res.status(400).json({ msg: "Upload resume first" });
     }
 
-    const response = await client.chat.complete({
-      model: "mistral-small-latest",
-      messages: [
-        {
-          role: "user",
-          content: `
-You are a senior technical recruiter. Evaluate the following resume against the job description.
+    const prompt = buildScoringPrompt(user.resumeText, jobDetails.description);
+    const text = await callMistral(prompt);
+    const parsed = parseJSON(text, SCORE_FALLBACK);
 
-RESUME:
-${user.resumeText.slice(0, 1200)}
-
-JOB DESCRIPTION:
-${jobDetails.description}
-
-EVALUATION FRAMEWORK:
-matchScore — Score 0 to 100 based on fit.
-missingSkills — Skills explicitly required in JD that have ZERO mention in resume.
-strengths — Specific evidence-based strengths.
-weaknesses — One clear, honest gap.
-summary — 3 sentence honest evaluation.
-
-Return ONLY valid JSON:
-{
-  "matchScore": number,
-  "missingSkills": ["skill"],
-  "strengths": ["strength"],
-  "weaknesses": ["gap"],
-  "summary": "3 sentences"
-}
-`,
-        },
-      ],
-    });
-
-    const text = response.choices[0].message.content;
-    const clean = text.replace(/```json|```/g, "").trim();
-
-    let parsed;
-    try {
-      parsed = JSON.parse(clean);
-    } catch {
-      parsed = { matchScore: 50, summary: "Parsing failed" };
-    }
+    parsed.matchScore = clampScore(parsed.matchScore);
 
     res.json(parsed);
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }
 };
+
+// ─── 5. IMPROVE BULLET POINT ─────────────────────────────────
 
 export const improveBulletPoint = async (req, res) => {
   try {
@@ -439,93 +336,147 @@ export const improveBulletPoint = async (req, res) => {
       return res.status(400).json({ msg: "Please provide a bullet point to improve." });
     }
 
-    const response = await client.chat.complete({
-      model: "mistral-small-latest",
-      messages: [
-        {
-          role: "user",
-          content: `You are an expert technical resume writer. Improve the following resume bullet point to make it more impactful, quantified, and action-oriented.
-          
-Original Bullet: "${bullet}"
+    const prompt = `Improve this resume bullet point.
 
-Return ONLY valid JSON in the following format, with no markdown:
+ORIGINAL: "${bullet}"
+
+RULES:
+- Start with strong action verb (Built, Developed, Optimized, Implemented)
+- Add quantification (numbers, metrics, percentages)
+- Mention specific technologies used
+- Show measurable impact or outcome
+- Keep under 25 words
+
+OUTPUT FORMAT (return ONLY this JSON, no markdown fences):
 {
-  "improved": "The newly improved bullet point",
-  "explanation": "A short sentence explaining why this is better"
-}`
-        }
-      ]
+  "improved": "the improved bullet point",
+  "explanation": "one sentence explaining why this is better"
+}`;
+
+    const text = await callMistral(prompt);
+    const parsed = parseJSON(text, {
+      improved: bullet,
+      explanation: "Could not process. Please try again.",
     });
 
-    const text = response.choices[0].message.content;
-    const clean = text.replace(/```json|```/g, "").trim();
-    let parsed;
-    try {
-      parsed = JSON.parse(clean);
-    } catch {
-      parsed = { improved: bullet, explanation: "Failed to parse." };
-    }
-    
     res.json(parsed);
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }
 };
 
-export const analyzeApplicant = async (req , res)=>{
-  try{
-    const{applicationId} = req.body;
-    if(!applicationId)
-    {
-      return res.status(404).json({msg:"Applicant not found"});
+// ─── 6. ANALYZE APPLICANT (Recruiter: analyze specific applicant) ─
+// Uses the EXACT same buildScoringPrompt as matchResume and evaluate
+
+export const analyzeApplicant = async (req, res) => {
+  try {
+    const { applicationId } = req.body;
+    if (!applicationId) {
+      return res.status(404).json({ msg: "Applicant not found" });
     }
+
     const app = await Application.findById(applicationId)
-    .populate("jobId")
-    .populate("userId");
+      .populate("jobId")
+      .populate("userId");
 
-    if(!app) return res.status(404).json({msg: "No applicant found"});
+    if (!app) return res.status(404).json({ msg: "No applicant found" });
 
-    if(!app.userId?.resumeText){
-      return res.status(400).json({msg: "Applicant has no Resume"});
+    if (!app.userId?.resumeText) {
+      return res.status(400).json({ msg: "Applicant has no Resume" });
     }
-    const response = await client.chat.complete({
-      model:"mistral-small-latest",
-      messages:[{
-        role:"user",
-        content:`
-        You are a senior technical recruiter.
 
-RESUME: ${app.userId.resumeText.slice(0, 1200)}
-JOB DESCRIPTION: ${app.jobId.description}
+    const prompt = buildScoringPrompt(app.userId.resumeText, app.jobId.description);
+    const text = await callMistral(prompt);
+    const parsed = parseJSON(text, SCORE_FALLBACK);
 
-Return ONLY valid JSON:
-{
-  "matchScore": number,
-  "missingSkills": [],
-  "strengths": [],
-  "summary": "2-3 sentence evaluation"
-}
-        `
-        
-      }]
-    });
+    parsed.matchScore = clampScore(parsed.matchScore);
 
-    const text = response.choices[0].message.content;
-    const clean = text.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(clean);
-
-    app.aiAnalysis={
-      matchScore:parsed.matchScore,
-      missingSkills:parsed.missingSkills,
-      strengths:parsed.strengths,
-      summary:parsed.summary,
+    app.aiAnalysis = {
+      matchScore: parsed.matchScore,
+      missingSkills: parsed.missingSkills || [],
+      strengths: parsed.strengths || [],
+      summary: parsed.summary || "",
+      weaknesses: parsed.weaknesses || [],
       analyzedAt: new Date(),
-    }
+    };
     await app.save();
     res.json(app.aiAnalysis);
-  
-  }
-   catch (err) {
+
+  } catch (err) {
     res.status(500).json({ msg: err.message });
   }
 };
+
+const getTag = (score) => {
+  if (score >= 80) return "Strong Fit";
+  if (score >= 60) return "Moderate Fit";
+  return "Low Fit";
+};
+export const getTopCandidates = async(req , res)=>{
+  try{
+    const {jobId} = req.params;
+
+    const applications = await Application.find({jobId})
+    .populate("jobId")
+    .populate("userId");
+
+    if(!applications.length){
+      return res.json([]);
+    }
+    const results = [];
+    for(const app of applications){
+      try{if(app.aiAnalysis?.matchScore){
+        results.push({
+          applicationId: app._id,
+          name: app.userId.name,
+          matchScore: app.aiAnalysis.matchScore,
+          summary: app.aiAnalysis.summary,
+          strengths: app.aiAnalysis.strengths,
+          missingSkills: app.aiAnalysis.missingSkills,
+          weaknesses: app.aiAnalysis.weaknesses,
+          tag : getTag(app.aiAnalysis.matchScore)
+        });
+        continue;
+      }
+      const prompt = buildScoringPrompt(app.userId.resumeText , app.jobId.description);
+      const text = await callMistral(prompt);
+      
+      const parsed = parseJSON(text , SCORE_FALLBACK);
+      const score = clampScore(parsed.matchScore);
+      app.aiAnalysis ={
+        matchScore: score,
+        missingSkills: parsed.missingSkills,
+        strengths : parsed.strengths,
+        weaknesses : parsed.weaknesses,
+        analyzedAt : new Date(),
+      };
+
+      await app.save();
+      results.push({
+        applicationId : app._id,
+        name: app.userId.name,
+        matchScore:  score,
+        summary : parsed.summary,
+        strengths : parsed.strengths,
+        missingSkills: parsed.missingSkills,
+        weaknesses: parsed.weaknesses,
+        tag : getTag(score),
+      });
+
+      } catch{
+        results.push({
+          applicationId: app._id,
+          name: app.userId?.name || "Candidate",
+          matchScore: 50,
+          tag : "Moderate fit"});
+      }
+    }
+    results.sort((a,b) => b.matchScore-a.matchScore);
+    res.json(results);
+
+
+  }catch(err){
+    console.log(err);
+    res.status(500).json({msg : err.message});
+  }
+}

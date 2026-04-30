@@ -55,10 +55,14 @@ export const uploadResume = async (req, res) => {
 
     // 8. Save to DB
     const updatedUser = await User.findByIdAndUpdate(
-      req.user.id,
-      { resumeUrl, resumeText: text },
-      { new: true }
-    );
+  req.user.id,
+  { 
+    resumeUrl, 
+    resumeText: text,
+    recommendations: [], 
+  },
+  { new: true }
+);
 
     if (!updatedUser) {
       return res.status(404).json({ msg: "User not found" });
