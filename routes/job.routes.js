@@ -1,5 +1,5 @@
 import express from "express";
-import { createJob, getJobs, getJobById, getMyJobs, updateJobStatus } from "../controllers/job.controller.js";
+import { createJob, getJobs, getJobById, getMyJobs, updateJobStatus, deleteJob } from "../controllers/job.controller.js";
 import { auth } from "../middleware/auth.middleware.js";
 import { recruiterOnly } from "../middleware/role.middleware.js";
 import { getApplicants } from "../controllers/application.controller.js";
@@ -9,6 +9,7 @@ router.get("/mine", auth, recruiterOnly, getMyJobs);
 router.post("/", auth, recruiterOnly, createJob);
 router.get("/", getJobs);
 router.put("/status", auth, recruiterOnly, updateJobStatus);
+router.delete("/:id", auth, recruiterOnly, deleteJob);
 router.get("/:id/applicants", auth, recruiterOnly, getApplicants);
 router.get("/:id", getJobById);
 

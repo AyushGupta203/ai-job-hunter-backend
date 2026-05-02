@@ -1,4 +1,5 @@
 import Job from "../models/job.js";
+import Application from "../models/Application.js";
 
 export const createJob = async(req , res)=>{
 
@@ -76,4 +77,30 @@ export const updateJobStatus = async (req , res) =>{
   job.status = status;
   await job.save();
   res.json(job);
+};
+
+// Delete Job
+export const deleteJob = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const job = await Job.findById(id);
+    if (!job) {
+      return res.status(404).json({ msg: "Job not found" });
+    }
+
+    if (job.postedBy.toString() !== req.user.id) {
+      return res.status(403).json({ msg: "Not allowed" });
+    }
+
+    // Delete all applications for this job
+    await Application.deleteMany({ jobId: id });
+
+    // Delete the job
+    await Job.findByIdAndDelete(id);
+
+    res.json({ msg: "Job deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
 };
