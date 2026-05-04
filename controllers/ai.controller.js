@@ -480,3 +480,91 @@ export const getTopCandidates = async(req , res)=>{
     res.status(500).json({msg : err.message});
   }
 }
+
+
+export const extractJobInfo = async (req , res) =>{
+ 
+  try{
+     const {rawText} = req.body;
+     if(!rawText){
+      return res.status(400).json({msg: "please provide job description text"});
+     }
+
+     const response = await client.chat.complete
+  ({
+      model: "mistral-small-latest",
+      messages: [
+        {
+      role: "user",
+      content: `<s>[INST] You are a job posting data extractor. Parse the raw job description and return structured JSON.
+
+<raw_job_posting>
+${rawText}
+</raw_job_posting>
+
+# Extraction Rules
+
+1. **Title**: Extract exact job title. If not found: ""
+2. **Company**: Extract company name. If not found: ""
+3. **Location**: Extract location or set to "Remote" if mentioned. If not found: ""
+4. **Salary**: Extract salary range. If not found: "Not Disclosed"
+5. **Description**: 
+   - Clean and reformat the job description professionally
+   - Remove: recruiter contact info, email addresses, phone numbers, application links
+   - Remove: HTML tags, excessive line breaks, special characters
+   - Keep: job responsibilities, requirements, benefits
+   - Max length: 500 characters (not words)
+   - If original is longer, summarize key points
+
+# Output Format
+
+Return ONLY the JSON object below. No markdown, no explanation, no preamble:
+
+{
+  "title": "",
+  "company": "",
+  "location": "",
+  "salary": "",
+  "description": ""
+}
+
+# Example
+
+Input:
+"Senior React Developer - TechCorp Inc.
+Location: San Francisco, CA (Remote OK)
+Salary: $120k-$160k
+We're looking for... [rest of description]
+Contact: recruiter@techcorp.com"
+
+Output:
+{
+  "title": "Senior React Developer",
+  "company": "TechCorp Inc.",
+  "location": "San Francisco, CA (Remote OK)",
+  "salary": "$120k-$160k",
+  "description": "TechCorp is seeking a Senior React Developer to build scalable web applications. Requirements: 5+ years React experience, strong TypeScript skills, experience with Redux. Benefits: Health insurance, 401k matching, flexible work schedule."
+}
+
+Now extract from the raw job posting above. [/INST]`
+    }]})
+
+    const text = response.choices[0].message.content;
+    const clean =text.replace(/```json|```/g, "").trim();
+
+    let parsed;
+    try{
+      parsed = JSON.parse(clean);
+    }catch{
+      parsed ={
+        title: "", company:"", location:"", salary:"Not Disclosed", description: rawText
+      };
+    }
+    res.json(parsed);
+    }
+    catch(err){
+      console.log(err);
+      res.status(500).json({msg : err.message});
+    }
+  
+}
