@@ -544,7 +544,9 @@ ${rawText}
 2. **Company**: Extract company name. If not found: ""
 3. **Location**: Extract location or set to "Remote" if mentioned. If not found: ""
 4. **Salary**: Extract salary range. If not found: "Not Disclosed"
-5. **Description**: 
+5. **Experience**: Extract the required experience level (e.g. "3-5 years", "Entry Level"). If not found: "Not specified"
+6. **Skills**: Extract key required skills as a comma-separated string (e.g. "React, Node.js, AWS"). If not found: ""
+7. **Description**: 
    - Clean and reformat the job description professionally
    - Remove: recruiter contact info, email addresses, phone numbers, application links
    - Remove: HTML tags, excessive line breaks, special characters
@@ -561,6 +563,8 @@ Return ONLY the JSON object below. No markdown, no explanation, no preamble:
   "company": "",
   "location": "",
   "salary": "",
+  "experienceLevel": "",
+  "skills": "",
   "description": ""
 }
 
@@ -579,6 +583,8 @@ Output:
   "company": "TechCorp Inc.",
   "location": "San Francisco, CA (Remote OK)",
   "salary": "$120k-$160k",
+  "experienceLevel": "5+ years",
+  "skills": "React, TypeScript, Redux",
   "description": "TechCorp is seeking a Senior React Developer to build scalable web applications. Requirements: 5+ years React experience, strong TypeScript skills, experience with Redux. Benefits: Health insurance, 401k matching, flexible work schedule."
 }
 
@@ -593,7 +599,7 @@ Now extract from the raw job posting above. [/INST]`
       parsed = JSON.parse(clean);
     }catch{
       parsed ={
-        title: "", company:"", location:"", salary:"Not Disclosed", description: rawText
+        title: "", company:"", location:"", salary:"Not Disclosed", experienceLevel: "Not specified", skills: "", description: rawText
       };
     }
     res.json(parsed);

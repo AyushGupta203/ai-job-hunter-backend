@@ -39,6 +39,14 @@ hiredCount: {
 salary: {
   type: String,
   default: "Not Disclosed"
+},
+experienceLevel: {
+  type: String,
+  default: "Not specified"
+},
+skills: {
+  type: String,
+  default: ""
 }
   },
   {timestamps: true}
