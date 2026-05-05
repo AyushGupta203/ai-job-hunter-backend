@@ -102,7 +102,7 @@ const SCORE_FALLBACK = {
   summary: "Analysis could not be completed. Please try again.",
 };
 
-// ─── 1. MATCH RESUME (Recruiter: match applicant to job) ──────
+// ─── 1. MATCH RESUME (Recruiter: match applicant to job) 
 
 export const matchResume = async (req, res) => {
   try {
@@ -159,12 +159,30 @@ export const recommendJobs = async (req, res) => {
       return res.status(400).json({ msg: "Upload resume first" });
     }
 
-    // Return cached results if available
-    if (user.recommendations?.length) {
-      return res.json(user.recommendations);
+    
+    // Return cached results if available, and ensure they have the new fields
+    if (user.recommendations?.length && !req.query.refresh) {
+      const firstRec = user.recommendations[0];
+      if (firstRec && firstRec.company !== undefined && firstRec.missingSkills !== undefined) {
+        return res.json(user.recommendations);
+      }
     }
 
-    const jobs = await Job.find();
+    const jobs = await Job.find({status:"open"});
+    if(jobs.length===0){
+      return res.json([]);
+    }
+
+    const applications = await Application.find({userId: req.user.id});
+    const appliedJobIds = applications.map(a=> a.jobId.toString());
+
+    const unappliedJobs = jobs.filter(j=> !appliedJobIds.includes(j._id.toString()));
+
+     if (unappliedJobs.length === 0) {
+      return res.json([]);
+    }
+
+
 
     // Pre-filter: rough keyword overlap to pick top 5 candidates
     const roughScore = (resume, jd) => {
@@ -183,39 +201,44 @@ export const recommendJobs = async (req, res) => {
       );
     };
 
-    const topJobs = jobs
-      .map(j => ({ job: j, score: roughScore(user.resumeText, j.description) }))
+    const topJobs = unappliedJobs.map(j => ({ job: j, score: roughScore(user.resumeText, j.description) }))
       .sort((a, b) => b.score - a.score)
-      .slice(0, 5)
+      .slice(0, 10)
       .map(x => x.job);
 
-    // Score EACH job individually using the EXACT same prompt
-    const results = [];
+  const results = await Promise.all(
+  topJobs.map(async (job) => {
+    try {
+      const prompt = buildScoringPrompt(user.resumeText, job.description);
+      const text = await callMistral(prompt);
+      const parsed = parseJSON(text, SCORE_FALLBACK);
 
-    for (const job of topJobs) {
-      try {
-        const prompt = buildScoringPrompt(user.resumeText, job.description);
-        const text = await callMistral(prompt);
-        const parsed = parseJSON(text, SCORE_FALLBACK);
-
-        results.push({
-          jobId: job._id,
-          title: job.title,
-          location: job.location,
-          matchScore: clampScore(parsed.matchScore),
-          reason: parsed.reason || parsed.summary?.split(".")[0] || "AI-analyzed match",
-        });
-      } catch {
-        // If one job fails, still continue with others
-        results.push({
-          jobId: job._id,
-          title: job.title,
-          location: job.location,
-          matchScore: 50,
-          reason: "Could not analyze this job",
-        });
-      }
+      return {
+        jobId: job._id,
+        title: job.title,
+        location: job.location,
+        company: job.company,
+        salary: job.salary,
+        missingSkills: parsed.missingSkills || [],
+        strengths: parsed.strengths || [],
+        matchScore: clampScore(parsed.matchScore),
+        reason: parsed.reason || (parsed.summary ? parsed.summary.split(".")[0] : "AI-analyzed match"),
+      };
+    } catch {
+      return {
+        jobId: job._id,
+        title: job.title,
+        location: job.location,
+        company: job.company,
+        salary: job.salary,
+        missingSkills: [],
+        strengths: [],
+        matchScore: 50,
+        reason: "Could not analyze this job",
+      };
     }
+  })
+);
 
     // Sort by score descending
     results.sort((a, b) => b.matchScore - a.matchScore);
@@ -423,55 +446,68 @@ export const getTopCandidates = async(req , res)=>{
     if(!applications.length){
       return res.json([]);
     }
-    const results = [];
-    for(const app of applications){
-      try{if(app.aiAnalysis?.matchScore){
-        results.push({
-          applicationId: app._id,
-          name: app.userId.name,
-          matchScore: app.aiAnalysis.matchScore,
-          summary: app.aiAnalysis.summary,
-          strengths: app.aiAnalysis.strengths,
-          missingSkills: app.aiAnalysis.missingSkills,
-          weaknesses: app.aiAnalysis.weaknesses,
-          tag : getTag(app.aiAnalysis.matchScore)
-        });
-        continue;
-      }
-      const prompt = buildScoringPrompt(app.userId.resumeText , app.jobId.description);
-      const text = await callMistral(prompt);
-      
-      const parsed = parseJSON(text , SCORE_FALLBACK);
-      const score = clampScore(parsed.matchScore);
-      app.aiAnalysis ={
-        matchScore: score,
-        missingSkills: parsed.missingSkills,
-        strengths : parsed.strengths,
-        weaknesses : parsed.weaknesses,
-        analyzedAt : new Date(),
-      };
+    const results = await Promise.all(
+      applications.map(async (app) => {
+        try {
+          if (app.aiAnalysis?.matchScore) {
+            return {
+              applicationId: app._id,
+              name: app.userId?.name || "Candidate",
+              matchScore: app.aiAnalysis.matchScore,
+              summary: app.aiAnalysis.summary,
+              strengths: app.aiAnalysis.strengths,
+              missingSkills: app.aiAnalysis.missingSkills,
+              weaknesses: app.aiAnalysis.weaknesses,
+              tag: getTag(app.aiAnalysis.matchScore)
+            };
+          }
 
-      await app.save();
-      results.push({
-        applicationId : app._id,
-        name: app.userId.name,
-        matchScore:  score,
-        summary : parsed.summary,
-        strengths : parsed.strengths,
-        missingSkills: parsed.missingSkills,
-        weaknesses: parsed.weaknesses,
-        tag : getTag(score),
-      });
+          if (!app.userId?.resumeText || !app.jobId?.description) {
+            return {
+              applicationId: app._id,
+              name: app.userId?.name || "Candidate",
+              matchScore: 50,
+              tag: "Moderate Fit"
+            };
+          }
 
-      } catch{
-        results.push({
-          applicationId: app._id,
-          name: app.userId?.name || "Candidate",
-          matchScore: 50,
-          tag : "Moderate fit"});
-      }
-    }
-    results.sort((a,b) => b.matchScore-a.matchScore);
+          const prompt = buildScoringPrompt(app.userId.resumeText, app.jobId.description);
+          const text = await callMistral(prompt);
+          
+          const parsed = parseJSON(text, SCORE_FALLBACK);
+          const score = clampScore(parsed.matchScore);
+          app.aiAnalysis = {
+            matchScore: score,
+            missingSkills: parsed.missingSkills,
+            strengths: parsed.strengths,
+            weaknesses: parsed.weaknesses,
+            analyzedAt: new Date(),
+          };
+
+          await app.save();
+          return {
+            applicationId: app._id,
+            name: app.userId.name,
+            matchScore: score,
+            summary: parsed.summary,
+            strengths: parsed.strengths,
+            missingSkills: parsed.missingSkills,
+            weaknesses: parsed.weaknesses,
+            tag: getTag(score),
+          };
+
+        } catch (err) {
+          return {
+            applicationId: app._id,
+            name: app.userId?.name || "Candidate",
+            matchScore: 50,
+            tag: "Moderate Fit"
+          };
+        }
+      })
+    );
+
+    results.sort((a, b) => b.matchScore - a.matchScore);
     res.json(results);
 
 
