@@ -14,28 +14,15 @@ import aiRoutes from "../routes/ai.routes.js";
 const app = express();
 
 // ── Middleware ──────────────────────────────────
-// CLIENT_URL can be a comma-separated list of allowed frontend URLs:
-//   e.g. CLIENT_URL=https://ai-job-hunter.vercel.app,https://www.myjobsite.com
-const allowedOrigins = [
-  "http://localhost:5173",
-  "http://localhost:3000",
-  ...(process.env.CLIENT_URL
-    ? process.env.CLIENT_URL.split(",").map((o) => o.trim()).filter(Boolean)
-    : []),
-];
-
-console.log("✅ CORS allowed origins:", allowedOrigins);
-
-app.use(cors({
-  origin: (origin, callback) => {
-    // Allow server-to-server / Postman / curl (no Origin header)
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    console.warn(`🔴 CORS blocked: ${origin}`);
-    callback(new Error(`CORS: origin '${origin}' not allowed`));
-  },
-  credentials: true,
-}));
+app.use(
+  cors({
+    origin: [
+      "http://localhost:5173",
+      "https://ai-job-hunter-frontend.vercel.app",
+    ],
+    credentials: true,
+  })
+);
 
 app.use(express.json());
 
