@@ -62,7 +62,7 @@ export const getApplicants = async (req, res) => {
     }
 
     const applicants = await Application.find({ jobId })
-      .populate("userId", "name email resumeUrl resumeText")
+      .populate("userId", "name email resumeUrl resumeText socialLinks")
       .sort({ createdAt: -1 });
 
     res.json(applicants);

@@ -42,7 +42,14 @@ const userSchema = new mongoose.Schema(
       type: Array,
       default: [],
     },
+    socialLinks: {
+  linkedin: String,
+  github: String,
+  portfolio: String,
+  leetcode: String,
+},
 
+companyWebsite: String,
     isEmailVerified:{
       type:Boolean,
       default: false

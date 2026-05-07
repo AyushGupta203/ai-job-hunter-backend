@@ -87,7 +87,8 @@ export const getJobs = async (req, res)=>{
 
 export const getJobById = async(req, res)=>{
   try{
-    const job = await Job.findById(req.params.id);
+    const job = await Job.findById(req.params.id)
+      .populate("postedBy", "name companyWebsite socialLinks");
 
     if(!job){
       return res.status(404).json({msg: "Job Not Found"})

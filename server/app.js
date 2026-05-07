@@ -5,11 +5,14 @@ import dotenv from "dotenv";
 dotenv.config();
 
 // Route imports
+import analyticsRoutes from "../routes/analytics.routes.js";
+
 import authRoutes from "../routes/auth.routes.js";
 import jobRoutes from "../routes/job.routes.js";
 import applicationRoutes from "../routes/application.routes.js";
 import resumeRoutes from "../routes/resume.routes.js";
 import aiRoutes from "../routes/ai.routes.js";
+import userRoutes from "../routes/user.routes.js";
 
 const app = express();
 
@@ -32,6 +35,8 @@ app.use("/api/jobs", jobRoutes);
 app.use("/api/applications", applicationRoutes);
 app.use("/api/resume", resumeRoutes);
 app.use("/api/ai", aiRoutes);
+app.use("/api/analytics", analyticsRoutes);
+app.use("/api/users", userRoutes);
 
 // ── Health check ───────────────────────────────
 app.get("/", (req, res) => {
