@@ -20,10 +20,10 @@ const applicationSchema = new mongoose.Schema(
 },
 
    aiAnalysis: {
-  matchScore: Number,       
+  matchScore: Number,
   missingSkills: [String],
-  strengths: [String],    
-  weaknesses: [String],     
+  strengths: [String],
+  weaknesses: [String],
   summary: String,
   analyzedAt: Date,
 },
@@ -33,7 +33,13 @@ const applicationSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-applicationSchema.index({ jobId: 1, userId: 1 }, { unique: true });
+applicationSchema.index({ userId: 1 });
+
+applicationSchema.index({ jobId: 1 });
+
+applicationSchema.index({ createdAt: -1 });
+
+applicationSchema.index({ status: 1 });
 
 const Application = mongoose.model("Application", applicationSchema);
 

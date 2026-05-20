@@ -51,5 +51,12 @@ skills: {
   },
   {timestamps: true}
 );
+jobSchema.index({ title: "text", company: "text" });
+
+jobSchema.index({ location: 1 });
+
+jobSchema.index({ postedBy: 1 });
+
+jobSchema.index({ status: 1 });
 const Job = mongoose.model("Job" , jobSchema);
 export default Job;

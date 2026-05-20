@@ -22,7 +22,7 @@ export const registerUser = async (req, res)=> {
         return res.status(400).json({msg: "User already exists"});
       }
 
-      const salt = await bcrypt.genSalt(10);
+      const salt = await bcrypt.genSalt(8);
       const hashedPassword = await bcrypt.hash(password, salt);
 
       const token = crypto.randomBytes(32).toString(`hex`);
@@ -38,12 +38,14 @@ export const registerUser = async (req, res)=> {
       });
       const link = `${process.env.CLIENT_URL}/verify-email/${token}`;
 
-      await sendEmail(
+      sendEmail(
         normalizedEmail,
         "verify your Email",
        ` <h3> Verify Email </h3>
         <a href  = "${link}">Click here</a>`
-      );
+      ).catch(err => {
+        console.error("Failed to send verification email:", err.message);
+      });
 
       
    return res.status(201).json({
@@ -67,7 +69,7 @@ export const registerUser = async (req, res)=> {
 
       
       if(!user){
-        return res.send("Invalid or expired token")
+        return res.status(400).json({ msg: "Invalid or expired token" });
       }
 
       user.isEmailVerified = true;
@@ -76,12 +78,27 @@ export const registerUser = async (req, res)=> {
 
       await user.save();
 
-      res.send("Email verified successfully. You can now login.");
+      const tokenJWT = jwt.sign(
+        { id: user._id, role: user.role },
+        process.env.JWT_SECRET,
+        { expiresIn: "7d" }
+      );
+
+      res.status(200).json({
+        token: tokenJWT,
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+        },
+        msg: "Email verified successfully. You can now login.",
+      });
 
     }
     catch(err){
       console.error(err.message);
-      res.status(500).send("server error");
+      res.status(500).json({ msg: "Server error" });
     }
   }
 
