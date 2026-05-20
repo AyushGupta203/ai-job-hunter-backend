@@ -116,6 +116,10 @@ export const loginUser = async (req, res)=> {
   try{
     const {email , password} = req.body;
     
+    if(!email || !password){
+      return res.status(400).json({msg: "Please enter all fields"});
+    }
+    
     const normalizedEmail = email.toLowerCase();
     const user = await User.findOne({ email: normalizedEmail });
     
