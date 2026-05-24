@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs"
 import crypto from "crypto"; 
 import jwt from "jsonwebtoken"
 import sendEmail from "../utils/sendEmail.js";
+import { getVerificationEmailTemplate } from "../utils/emailTemplates.js";
 
 //REGISTER USER
 export const registerUser = async (req, res)=> {
@@ -38,23 +39,25 @@ export const registerUser = async (req, res)=> {
       });
       const link = `${process.env.CLIENT_URL}/verify-email/${token}`;
 
-      sendEmail(
-        normalizedEmail,
-        "verify your Email",
-       ` <h3> Verify Email </h3>
-        <a href  = "${link}">Click here</a>`
-      ).catch(err => {
+      try {
+        await sendEmail(
+          normalizedEmail,
+          "Verify your email - AI Job Hunter",
+          getVerificationEmailTemplate(name, link)
+        );
+      } catch (err) {
         console.error("Failed to send verification email:", err.message);
-      });
+        await User.findByIdAndDelete(user._id);
+        return res.status(500).json({ msg: "Failed to send verification email. Please check your email configurations." });
+      }
 
-      
-   return res.status(201).json({
-      message: "Signup successful. Please verify your email",
-    });
+      return res.status(201).json({
+        message: "Signup successful. Please verify your email",
+      });
 
     }catch(err){
       console.error(err.message);
-    res.status(500).json({msg: "Server error"});
+      res.status(500).json({msg: "Server error"});
     }
   };
 
@@ -159,4 +162,47 @@ export const loginUser = async (req, res)=> {
 
 export const getMe = (req, res) => {
   res.json(req.user);
+};
+
+// RESEND VERIFICATION EMAIL
+export const resendVerification = async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ msg: "Email is required" });
+    }
+
+    const normalizedEmail = email.toLowerCase();
+    const user = await User.findOne({ email: normalizedEmail });
+
+    if (!user) {
+      return res.status(404).json({ msg: "User not found" });
+    }
+
+    if (user.isEmailVerified) {
+      return res.status(400).json({ msg: "Email is already verified" });
+    }
+
+    const token = crypto.randomBytes(32).toString("hex");
+    user.emailVerificationToken = token;
+    user.emailVerificationExpires = Date.now() + 3600000; // 1 hour
+    await user.save();
+
+    const link = `${process.env.CLIENT_URL}/verify-email/${token}`;
+
+    try {
+      await sendEmail(
+        normalizedEmail,
+        "Verify your email - AI Job Hunter",
+        getVerificationEmailTemplate(user.name, link)
+      );
+      return res.status(200).json({ msg: "Verification email resent successfully" });
+    } catch (err) {
+      console.error("Failed to resend verification email:", err.message);
+      return res.status(500).json({ msg: "Failed to send verification email. Please try again later." });
+    }
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ msg: "Server error" });
+  }
 };

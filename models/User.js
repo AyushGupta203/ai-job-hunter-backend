@@ -60,7 +60,6 @@ companyWebsite: String,
   },
   {timestamps: true}
 );
-userSchema.index({ email: 1 }, { unique: true });
 
 userSchema.index({ role: 1 });
 const User = mongoose.model("User" , userSchema);
