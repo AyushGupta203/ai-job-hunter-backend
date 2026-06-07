@@ -31,8 +31,21 @@ export const registerUser = async (req, res)=> {
         isEmailVerified: true,
       });
 
+      const token = jwt.sign(
+        { id: user._id, role: user.role },
+        process.env.JWT_SECRET,
+        { expiresIn: "7d" }
+      );
+
       return res.status(201).json({
-        message: "Signup successful. You can now log in.",
+        token,
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+        },
+        message: "Signup successful.",
       });
 
     }catch(err){
